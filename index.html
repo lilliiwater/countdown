@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Countdown Widget</title>
+  <style>
+    body{
+      margin:0;
+      min-height:100vh;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+      background: transparent;
+    }
+    .card{
+      width:min(720px, 92vw);
+      border:1px solid rgba(0,0,0,.12);
+      border-radius:16px;
+      padding:18px 18px 16px;
+      background: rgba(255,255,255,.92);
+      backdrop-filter: blur(8px);
+      box-sizing:border-box;
+    }
+    .top{
+      display:flex;
+      align-items:baseline;
+      justify-content:space-between;
+      gap:12px;
+      margin-bottom:8px;
+    }
+    .name{
+      font-size:15px;
+      font-weight:700;
+      letter-spacing:.2px;
+      margin:0;
+    }
+    .date{
+      font-size:12px;
+      opacity:.7;
+      white-space:nowrap;
+    }
+    .big{
+      font-size:46px;
+      font-weight:800;
+      line-height:1;
+      margin:10px 0 6px;
+    }
+    .sub{
+      font-size:13px;
+      opacity:.75;
+      margin:0;
+    }
+    .barWrap{
+      margin-top:14px;
+      height:10px;
+      border-radius:999px;
+      background: rgba(0,0,0,.07);
+      overflow:hidden;
+    }
+    .bar{
+      height:100%;
+      width:0%;
+      border-radius:999px;
+      background: rgba(0,0,0,.65);
+      transition: width .6s ease;
+    }
+    .hint{
+      margin-top:10px;
+      font-size:12px;
+      opacity:.65;
+      line-height:1.35;
+      display:none;
+    }
+    .pill{
+      display:inline-block;
+      border:1px solid rgba(0,0,0,.12);
+      border-radius:999px;
+      padding:2px 8px;
+      font-size:12px;
+      opacity:.75;
+      margin-top:10px;
+    }
+
+    /* Urgence visuelle simple */
+    .warn .bar{ background: rgba(0,0,0,.85); }
+    .late .bar{ background: rgba(0,0,0,.45); }
+    .warn .big{ letter-spacing:-.5px; }
+
+    /* Dark mode (si Notion en dark) */
+    @media (prefers-color-scheme: dark){
+      .card{
+        background: rgba(20,20,20,.85);
+        border-color: rgba(255,255,255,.14);
+        color: rgba(255,255,255,.92);
+      }
+      .barWrap{ background: rgba(255,255,255,.10); }
+      .bar{ background: rgba(255,255,255,.78); }
+      .pill{ border-color: rgba(255,255,255,.18); }
+      .date, .sub, .hint, .pill{ opacity:.75; }
+    }
+  </style>
+</head>
+<body>
+  <div class="card" id="card">
+    <div class="top">
+      <h1 class="name" id="name">Projet</h1>
+      <div class="date" id="deadlineLabel"></div>
+    </div>
+
+    <div class="big" id="counter">—</div>
+    <p class="sub" id="subtitle">jours restants</p>
+
+    <div class="barWrap" aria-hidden="true">
+      <div class="bar" id="bar"></div>
+    </div>
+
+    <div class="pill" id="statusPill" style="display:none;"></div>
+
+    <p class="hint" id="hint">
+      Paramètres manquants. Utilise une URL du type :
+      <br><code>?date=2026-09-01&name=Mon%20Projet</code>
+    </p>
+  </div>
+
+<script>
+  // --- Helpers ---
+  function getParam(name){
+    const url = new URL(window.location.href);
+    return url.searchParams.get(name);
+  }
+
+  function formatFR(date){
+    return date.toLocaleDateString("fr-FR", { day:"2-digit", month:"long", year:"numeric" });
+  }
+
+  // Convertit "YYYY-MM-DD" en date "minuit" dans un fuseau approximé
+  // (sans lib externe : on prend minuit local, généralement OK pour un décompte en jours)
+  function parseISODate(iso){
+    // ISO strict attendu : 2026-09-01
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+    if(!m) return null;
+    const y = Number(m[1]), mo = Number(m[2]) - 1, d = Number(m[3]);
+    const dt = new Date(y, mo, d);
+    dt.setHours(0,0,0,0);
+    return dt;
+  }
+
+  function daysBetween(today, deadline){
+    const ms = deadline - today;
+    return Math.ceil(ms / (1000*60*60*24));
+  }
+
+  // --- Read params ---
+  const name = getParam("name") || "Projet";
+  const dateStr = getParam("date"); // required for real countdown
+  const startStr = getParam("start"); // optional, for progress bar
+  const tz = getParam("tz"); // optional (affiché seulement)
+
+  // --- DOM ---
+  const nameEl = document.getElementById("name");
+  const counterEl = document.getElementById("counter");
+  const subtitleEl = document.getElementById("subtitle");
+  const deadlineLabelEl = document.getElementById("deadlineLabel");
+  const hintEl = document.getElementById("hint");
+  const barEl = document.getElementById("bar");
+  const cardEl = document.getElementById("card");
+  const pillEl = document.getElementById("statusPill");
+
+  nameEl.textContent = decodeURIComponent(name);
+
+  // --- Validate date ---
+  const deadline = dateStr ? parseISODate(dateStr) : null;
+  if(!deadline){
+    // mode démo si pas de date
+    hintEl.style.display = "block";
+    deadlineLabelEl.textContent = "Ajoute ?date=YYYY-MM-DD";
+    counterEl.textContent = "—";
+    subtitleEl.textContent = "jours restants";
+  } else {
+    // Today at 00:00 local
+    const today = new Date();
+    today.setHours(0,0,0,0);
+
+    const d = daysBetween(today, deadline);
+
+    // Label deadline
+    const parts = [`Échéance : ${formatFR(deadline)}`];
+    if(tz) parts.push(`(${tz})`);
+    deadlineLabelEl.textContent = parts.join(" ");
+
+    // Countdown text
+    if (d > 0) {
+      counterEl.textContent = `J-${d}`;
+      subtitleEl.textContent = "jours restants";
+      pillEl.style.display = "inline-block";
+      pillEl.textContent = d <= 7 ? "Urgent" : (d <= 14 ? "À surveiller" : "En cours");
+      if (d <= 7) cardEl.classList.add("warn");
+    } else if (d === 0) {
+      counterEl.textContent = "JOUR J";
+      subtitleEl.textContent = "bonne livraison 🚀";
+      pillEl.style.display = "inline-block";
+      pillEl.textContent = "Aujourd’hui";
+      cardEl.classList.add("warn");
+    } else {
+      counterEl.textContent = "Terminé";
+      subtitleEl.textContent = `Échéance dépassée de ${Math.abs(d)} jour(s)`;
+      pillEl.style.display = "inline-block";
+      pillEl.textContent = "Clôturé";
+      cardEl.classList.add("late");
+    }
+
+    // Progress bar (optional)
+    // Si start est fourni : start -> deadline
+    // Sinon : progress sur 30 jours glissants (simple)
+    let progress = 0;
+    if (startStr) {
+      const start = parseISODate(startStr);
+      if (start && deadline > start) {
+        const total = deadline - start;
+        const done = Math.min(Math.max(today - start, 0), total);
+        progress = (done / total) * 100;
+      }
+    } else {
+      // fallback simple : 30 jours avant deadline
+      const start = new Date(deadline);
+      start.setDate(start.getDate() - 30);
+      const total = deadline - start;
+      const done = Math.min(Math.max(today - start, 0), total);
+      progress = (done / total) * 100;
+    }
+    barEl.style.width = `${Math.round(progress)}%`;
+  }
+</script>
+</body>
+</html>
